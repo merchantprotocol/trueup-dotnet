@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 10 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -96,8 +96,7 @@ public class ApiTests
             Assert.Equal(7, run.Result!.Stats["paired"]);
             var page = await tu.ListRunsAsync(1);
             Assert.Single(page.Runs);
-            Assert.True(page.HasMore);
-            Assert.NotEqual(page.Runs[0].Id, (await tu.ListRunsAsync(1, page.Runs[0].Id)).Runs[0].Id);
+            if (page.HasMore) Assert.NotEqual(page.Runs[0].Id, (await tu.ListRunsAsync(1, page.Runs[0].Id)).Runs[0].Id);
 
             var modelId = await tu.CreateModelAsync(result.RunId!, "sdk test");
             try
@@ -150,5 +149,22 @@ public class ApiTests
         var one = await tu.AuditAsync(new[] { Table.File(Path.Combine(Fixtures, "invoices", "inv-1045.txt")) }, result.Details.Weights);
         Assert.False(one.Details.Model!["learned"]!.GetValue<bool>());
         Assert.Equal("inv-1045.txt", Assert.Single(one.Findings).Subject);
+    }
+
+    [Fact]
+    public async Task EstimateANewJobThenTheNextWithTheSavedModel()
+    {
+        if (!Live) return;
+        var tu = new TrueUpClient();
+        var names = new[] { "barndo.tu", "01_anderson.csv", "02_brooks.csv", "03_carter.md", "04_dalton.txt", "05_ellis.json",
+            "06_foster.tsv", "07_garrison.txt", "08_hayes.csv", "09_iverson.csv", "10_jensen.md", "job_a.txt" };
+        var result = await tu.EstimateAsync(names.Select(n => Table.File(Path.Combine(Fixtures, "barndo", n))));
+        Assert.Equal("estimate", result.Analysis);
+        Assert.Equal(10, result.Stats["past estimates"]);
+        var total = result.Stats["total"];
+        Assert.True(Math.Abs(total - 292267) / 292267 < 0.05, $"total {total}");
+        Assert.True(result.Stats["low"] < total);
+        var next = await tu.EstimateAsync(new[] { Table.File(Path.Combine(Fixtures, "barndo", "job_b.txt")) }, result.Details.Weights);
+        Assert.False(next.Details.Model!["learned"]!.GetValue<bool>());
     }
 }

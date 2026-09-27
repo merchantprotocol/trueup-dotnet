@@ -225,6 +225,31 @@ public sealed class AuditDetails
     [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
 }
 
+/// <summary>The answer to an estimate call: the new job priced part by part (findings of kind priced_line), with an 80% range.</summary>
+public sealed class EstimateResult
+{
+    [JsonPropertyName("analysis")] public string Analysis { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("headline")] public string Headline { get; set; } = "";
+    /// <summary>total, low, high (the 80% range), categories priced, past estimates, ...</summary>
+    [JsonPropertyName("stats")] public Dictionary<string, double> Stats { get; set; } = new();
+    [JsonPropertyName("findings")] public List<Finding> Findings { get; set; } = new();
+    [JsonPropertyName("details")] public EstimateDetails Details { get; set; } = new();
+    [JsonPropertyName("inputs")] public List<string> Inputs { get; set; } = new();
+    [JsonPropertyName("engine")] public string? Engine { get; set; }
+    [JsonPropertyName("run_id")] public string? RunId { get; set; }
+}
+
+/// <summary>The job's scope and total, and what was learned.</summary>
+public sealed class EstimateDetails
+{
+    [JsonPropertyName("scope")] public List<JsonObject> Scope { get; set; } = new();
+    [JsonPropertyName("total")] public JsonObject? Total { get; set; }
+    [JsonPropertyName("model")] public JsonObject? Model { get; set; }
+    /// <summary>The trade and its labeled past estimates: pass back to <see cref="TrueUpClient.EstimateAsync"/> with just a request.</summary>
+    [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
+}
+
 /// <summary>A file stored in the team (uploaded through the API or the dashboard).</summary>
 public sealed class StoredFile
 {
@@ -461,6 +486,28 @@ public sealed class TrueUpClient
         var body = new JsonObject { ["left_file_id"] = leftFileId, ["right_file_id"] = rightFileId };
         if (model != null) body["model"] = model;
         return Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+            () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
+    }
+
+    // ---------------------------------------------------------------- estimate
+
+    /// <summary>
+    /// Price a new job from past estimates: a domain file for the trade (.tu), at least 3 past estimates in any format,
+    /// and one request describing the new job; or, with <paramref name="weights"/>, just the request. One analysis.
+    /// </summary>
+    public async Task<EstimateResult> EstimateAsync(IEnumerable<Table> files, JsonObject? weights = null, CancellationToken ct = default)
+    {
+        var parts = files.Select(f => ("files", f)).ToArray();
+        if (parts.Length == 0) throw new InvalidRequestException("Pass the domain file, past estimates and the request.", 0, "invalid_request", null);
+        return Deserialize<EstimateResult>(await SendAsync(HttpMethod.Post, "/v1/estimate", Multipart(parts, new ReconcileOptions { Weights = weights }), ct));
+    }
+
+    /// <summary>Price from files already stored in the team, by id. <paramref name="model"/>: a saved estimate model id.</summary>
+    public async Task<EstimateResult> EstimateStoredAsync(IEnumerable<string> fileIds, string? model = null, CancellationToken ct = default)
+    {
+        var body = new JsonObject { ["file_ids"] = new JsonArray(fileIds.Select(i => (JsonNode?)JsonValue.Create(i)).ToArray()) };
+        if (model != null) body["model"] = model;
+        return Deserialize<EstimateResult>(await SendAsync(HttpMethod.Post, "/v1/estimate",
             () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
     }
 
