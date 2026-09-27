@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 2 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -71,5 +71,52 @@ public class ApiTests
         var bad = await Assert.ThrowsAsync<InvalidRequestException>(() =>
             new TrueUpClient().ReconcileAsync(Table.File(Path.Combine(Fixtures, "statement.csv")), Table.Content("scan.pdf", "%PDF-1.4")));
         Assert.Equal((422, "unsupported_file"), (bad.Status, bad.Code));
+    }
+
+    [Fact]
+    public async Task StoredFilesRunsAndModels()
+    {
+        if (!Live) return;
+        var tu = new TrueUpClient();
+        var files = await tu.UploadFilesAsync(new[] { Table.File(Path.Combine(Fixtures, "statement.csv")), Table.File(Path.Combine(Fixtures, "receiving.csv")) });
+        var (statement, receiving) = (files[0], files[1]);
+        try
+        {
+            Assert.Equal(8, statement.Rows);
+            Assert.Equal("number", statement.Roles!["Qty"]);
+            Assert.Equal("receiving.csv", (await tu.GetFileAsync(receiving.Id)).Name);
+            Assert.Contains(await tu.ListFilesAsync(), f => f.Id == statement.Id);
+            Assert.Equal(File.ReadAllBytes(Path.Combine(Fixtures, "statement.csv")), await tu.FileContentAsync(statement.Id));
+
+            var result = await tu.ReconcileStoredAsync(statement.Id, receiving.Id);
+            Assert.Equal(7, result.Stats["paired"]);
+            Assert.StartsWith("run_", result.RunId);
+            var run = await tu.GetRunAsync(result.RunId!);
+            Assert.Equal("done", run.Run.Status);
+            Assert.Equal(7, run.Result!.Stats["paired"]);
+            var page = await tu.ListRunsAsync(1);
+            Assert.Single(page.Runs);
+            Assert.True(page.HasMore);
+            Assert.NotEqual(page.Runs[0].Id, (await tu.ListRunsAsync(1, page.Runs[0].Id)).Runs[0].Id);
+
+            var modelId = await tu.CreateModelAsync(result.RunId!, "sdk test");
+            try
+            {
+                Assert.Equal("trueup.match-weights", (await tu.GetModelAsync(modelId)).Weights!["format"]!.GetValue<string>());
+                var again = await tu.ReconcileStoredAsync(new[] { statement.Id, receiving.Id }, new StoredOptions { Model = modelId });
+                Assert.False(again.Details.Model!["learned"]!.GetValue<bool>());
+            }
+            finally
+            {
+                await tu.DeleteModelAsync(modelId);
+            }
+            await Assert.ThrowsAsync<NotFoundException>(() => tu.GetModelAsync(modelId));
+        }
+        finally
+        {
+            await tu.DeleteFileAsync(statement.Id);
+            await tu.DeleteFileAsync(receiving.Id);
+        }
+        await Assert.ThrowsAsync<NotFoundException>(() => tu.GetFileAsync(statement.Id));
     }
 }
