@@ -13,6 +13,6 @@
     <ProjectReference Include="../../src/TrueUp/TrueUp.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="fixtures/*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

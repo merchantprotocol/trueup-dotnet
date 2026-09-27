@@ -192,6 +192,39 @@ public sealed class MatchDetails
     [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
 }
 
+/// <summary>
+/// The answer to an audit call: documents (Analysis "audit") or a table's rows ("table-audit"). Findings' Kind:
+/// arithmetic (the numbers break a law; Amount is how far off) or duplicate_row.
+/// </summary>
+public sealed class AuditResult
+{
+    [JsonPropertyName("analysis")] public string Analysis { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("headline")] public string Headline { get; set; } = "";
+    [JsonPropertyName("stats")] public Dictionary<string, double> Stats { get; set; } = new();
+    [JsonPropertyName("findings")] public List<Finding> Findings { get; set; } = new();
+    [JsonPropertyName("details")] public AuditDetails Details { get; set; } = new();
+    [JsonPropertyName("inputs")] public List<string> Inputs { get; set; } = new();
+    [JsonPropertyName("engine")] public string? Engine { get; set; }
+    [JsonPropertyName("run_id")] public string? RunId { get; set; }
+}
+
+/// <summary>The laws learned (or applied), and the weights to apply them again.</summary>
+public sealed class AuditDetails
+{
+    public sealed class Law
+    {
+        [JsonPropertyName("scope")] public string? Scope { get; set; }
+        [JsonPropertyName("law")] public string Text { get; set; } = "";
+        [JsonPropertyName("held")] public string Held { get; set; } = "";
+    }
+
+    [JsonPropertyName("laws")] public List<Law> Laws { get; set; } = new();
+    [JsonPropertyName("model")] public JsonObject? Model { get; set; }
+    /// <summary>Pass back to <see cref="TrueUpClient.AuditAsync"/> to check new documents against the same laws.</summary>
+    [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
+}
+
 /// <summary>A file stored in the team (uploaded through the API or the dashboard).</summary>
 public sealed class StoredFile
 {
@@ -428,6 +461,29 @@ public sealed class TrueUpClient
         var body = new JsonObject { ["left_file_id"] = leftFileId, ["right_file_id"] = rightFileId };
         if (model != null) body["model"] = model;
         return Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+            () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
+    }
+
+    // ---------------------------------------------------------------- audit
+
+    /// <summary>
+    /// Find what doesn't add up. Text documents (invoices, statements, 4 or more of a kind): TrueUp learns the
+    /// arithmetic each kind obeys and flags the ones that break it. One table: the same for its rows, plus repeated
+    /// rows. <paramref name="weights"/>: the Details.Weights of an earlier audit, to apply its laws. One analysis.
+    /// </summary>
+    public async Task<AuditResult> AuditAsync(IEnumerable<Table> files, JsonObject? weights = null, CancellationToken ct = default)
+    {
+        var parts = files.Select(f => ("files", f)).ToArray();
+        if (parts.Length == 0) throw new InvalidRequestException("Pass the documents (or one table) to audit.", 0, "invalid_request", null);
+        return Deserialize<AuditResult>(await SendAsync(HttpMethod.Post, "/v1/audit", Multipart(parts, new ReconcileOptions { Weights = weights }), ct));
+    }
+
+    /// <summary>Audit files already stored in the team, by id. <paramref name="model"/>: a saved audit model id. The run is kept.</summary>
+    public async Task<AuditResult> AuditStoredAsync(IEnumerable<string> fileIds, string? model = null, CancellationToken ct = default)
+    {
+        var body = new JsonObject { ["file_ids"] = new JsonArray(fileIds.Select(i => (JsonNode?)JsonValue.Create(i)).ToArray()) };
+        if (model != null) body["model"] = model;
+        return Deserialize<AuditResult>(await SendAsync(HttpMethod.Post, "/v1/audit",
             () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
     }
 

@@ -80,6 +80,24 @@ foreach (var f in result.Findings) Console.WriteLine($"{f.Kind} {f.Subject} {f.D
 
 `Kind` is `match`, `unsure_match` (a person should check), `only_left` or `only_right`. `Details.Pairs` lists `[left id, right id, confidence]`. Like `ReconcileAsync`, it takes `Table.File`, `Table.Content` or `Table.Rows`; `MatchFilesAsync` picks the pair; `MatchStoredAsync` works on stored files (with a saved model); and `Details.Weights` can be passed back to `MatchAsync(left, right, weights)` to match next month's lists the same way. One analysis per call.
 
+## Audit
+
+Find what doesn't add up. Send text documents with labeled amounts (invoices, statements, schedules; about 4 or more of a kind) and TrueUp learns the arithmetic each kind obeys from the documents themselves, then flags the ones that break it. Send one table and it checks its rows the same way (qty × unit price = amount), and flags repeated rows.
+
+```csharp
+var files = Enumerable.Range(1, 6).Select(i => Table.File($"inv-104{i}.txt"));
+var result = await trueup.AuditAsync(files);
+Console.WriteLine(result.Headline);
+// 1 of 6 documents don't add up; 0 more to review (5 laws learned).
+foreach (var f in result.Findings) Console.WriteLine($"{f.Subject} {f.Amount} {f.Detail}");
+// inv-1045.txt 200 subtotal + tax amount = total: 4,837.84 vs 5,037.84
+
+// Next month, even one invoice at a time, against the same laws:
+await trueup.AuditAsync(new[] { Table.File("inv-1050.txt") }, result.Details.Weights);
+```
+
+`AuditStoredAsync(fileIds, model)` audits stored files. One analysis per call.
+
 ## Stored files, runs and saved models
 
 Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
@@ -154,7 +172,7 @@ new TrueUpClient(new TrueUpOptions
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 6 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 8 analyses)
 just test                            # or: docker compose run --rm test
 ```
 
