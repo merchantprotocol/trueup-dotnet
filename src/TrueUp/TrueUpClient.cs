@@ -167,6 +167,31 @@ public sealed class ReconcileResult
     [JsonPropertyName("run_id")] public string? RunId { get; set; }
 }
 
+/// <summary>The answer to a match call. Findings' Kind: match, unsure_match (a person should check), only_left, only_right.</summary>
+public sealed class MatchResult
+{
+    [JsonPropertyName("analysis")] public string Analysis { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("headline")] public string Headline { get; set; } = "";
+    [JsonPropertyName("stats")] public Dictionary<string, double> Stats { get; set; } = new();
+    [JsonPropertyName("findings")] public List<Finding> Findings { get; set; } = new();
+    [JsonPropertyName("details")] public MatchDetails Details { get; set; } = new();
+    [JsonPropertyName("inputs")] public List<string> Inputs { get; set; } = new();
+    [JsonPropertyName("engine")] public string? Engine { get; set; }
+    /// <summary>The kept run, for <see cref="TrueUpClient.MatchStoredAsync"/>.</summary>
+    [JsonPropertyName("run_id")] public string? RunId { get; set; }
+}
+
+/// <summary>How the columns lined up, every pair ([left id, right id, confidence]), and what was learned.</summary>
+public sealed class MatchDetails
+{
+    [JsonPropertyName("columns")] public JsonObject? Columns { get; set; }
+    [JsonPropertyName("pairs")] public List<JsonArray> Pairs { get; set; } = new();
+    [JsonPropertyName("model")] public JsonObject? Model { get; set; }
+    /// <summary>Pass back as <c>weights</c> to <see cref="TrueUpClient.MatchAsync"/> to match the same way without learning.</summary>
+    [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
+}
+
 /// <summary>A file stored in the team (uploaded through the API or the dashboard).</summary>
 public sealed class StoredFile
 {
@@ -366,6 +391,45 @@ public sealed class TrueUpClient
     /// <summary>Send two or more files; TrueUp picks the pair to reconcile and which side is which. One analysis.</summary>
     public Task<ReconcileResult> ReconcileFilesAsync(IEnumerable<Table> files, ReconcileOptions? options = null, CancellationToken ct = default) =>
         UploadAsync(files.Select(f => ("files", f)).ToArray(), options ?? new ReconcileOptions(), ct);
+
+    // ---------------------------------------------------------------- match
+
+    /// <summary>
+    /// Match two lists that describe the same things in different words (two catalogs, a price book and an invoice):
+    /// each record on <paramref name="left"/> (the list to go through) is paired with its counterpart on
+    /// <paramref name="right"/> (the list to search), or reported as having none. <paramref name="weights"/>: the
+    /// Details.Weights of an earlier match, to apply instead of learning. One analysis.
+    /// </summary>
+    public async Task<MatchResult> MatchAsync(Table left, Table right, JsonObject? weights = null, CancellationToken ct = default)
+    {
+        if (left.IsRows && right.IsRows)
+        {
+            var body = new JsonObject
+            {
+                ["left"] = new JsonObject { ["name"] = left.Name, ["rows"] = JsonSerializer.SerializeToNode(left.RowList) },
+                ["right"] = new JsonObject { ["name"] = right.Name, ["rows"] = JsonSerializer.SerializeToNode(right.RowList) },
+            };
+            if (weights != null) body["weights"] = JsonNode.Parse(weights.ToJsonString());
+            return Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+                () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
+        }
+        return Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+            Multipart(new[] { ("left", left), ("right", right) }, new ReconcileOptions { Weights = weights }), ct));
+    }
+
+    /// <summary>Send two or more lists; TrueUp picks the pair to match and puts the shorter on the left. One analysis.</summary>
+    public async Task<MatchResult> MatchFilesAsync(IEnumerable<Table> files, JsonObject? weights = null, CancellationToken ct = default) =>
+        Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+            Multipart(files.Select(f => ("files", f)).ToArray(), new ReconcileOptions { Weights = weights }), ct));
+
+    /// <summary>Match two lists already stored in the team, by id. <paramref name="model"/>: a saved match model id. The run is kept.</summary>
+    public async Task<MatchResult> MatchStoredAsync(string leftFileId, string rightFileId, string? model = null, CancellationToken ct = default)
+    {
+        var body = new JsonObject { ["left_file_id"] = leftFileId, ["right_file_id"] = rightFileId };
+        if (model != null) body["model"] = model;
+        return Deserialize<MatchResult>(await SendAsync(HttpMethod.Post, "/v1/match",
+            () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
+    }
 
     // ---------------------------------------------------------------- stored files, runs, saved models
 
