@@ -163,6 +163,78 @@ public sealed class ReconcileResult
     [JsonPropertyName("details")] public Details Details { get; set; } = new();
     [JsonPropertyName("inputs")] public List<string> Inputs { get; set; } = new();
     [JsonPropertyName("engine")] public string? Engine { get; set; }
+    /// <summary>The kept run, for <see cref="TrueUpClient.ReconcileStoredAsync(string, string, StoredOptions?, CancellationToken)"/>; null for tables sent inline.</summary>
+    [JsonPropertyName("run_id")] public string? RunId { get; set; }
+}
+
+/// <summary>A file stored in the team (uploaded through the API or the dashboard).</summary>
+public sealed class StoredFile
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("size")] public long Size { get; set; }
+    /// <summary>"table" or "document".</summary>
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "";
+    [JsonPropertyName("rows")] public int? Rows { get; set; }
+    [JsonPropertyName("columns")] public List<string> Columns { get; set; } = new();
+    /// <summary>What TrueUp read each column as: "date", "number", "text", ...</summary>
+    [JsonPropertyName("roles")] public Dictionary<string, string>? Roles { get; set; }
+    [JsonPropertyName("created_at")] public string? CreatedAt { get; set; }
+}
+
+/// <summary>A run on stored files, from the API or the dashboard.</summary>
+public sealed class Run
+{
+    public sealed class ModelRef { [JsonPropertyName("id")] public string Id { get; set; } = ""; [JsonPropertyName("name")] public string? Name { get; set; } }
+
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("analysis")] public string Analysis { get; set; } = "";
+    /// <summary>"done" or "failed".</summary>
+    [JsonPropertyName("status")] public string Status { get; set; } = "";
+    /// <summary>"api" or "portal".</summary>
+    [JsonPropertyName("via")] public string Via { get; set; } = "";
+    [JsonPropertyName("inputs")] public List<string> Inputs { get; set; } = new();
+    [JsonPropertyName("model")] public ModelRef? Model { get; set; }
+    [JsonPropertyName("headline")] public string? Headline { get; set; }
+    [JsonPropertyName("stats")] public Dictionary<string, double>? Stats { get; set; }
+    /// <summary>How many findings the run has.</summary>
+    [JsonPropertyName("findings")] public int? Findings { get; set; }
+    [JsonPropertyName("error")] public string? Error { get; set; }
+    [JsonPropertyName("created_at")] public string CreatedAt { get; set; } = "";
+}
+
+/// <summary>One page of runs, newest first.</summary>
+public sealed class RunPage
+{
+    [JsonPropertyName("runs")] public List<Run> Runs { get; set; } = new();
+    [JsonPropertyName("has_more")] public bool HasMore { get; set; }
+}
+
+/// <summary>One run and its full result (null if the run failed).</summary>
+public sealed class RunDetail
+{
+    [JsonPropertyName("run")] public Run Run { get; set; } = new();
+    [JsonPropertyName("result")] public ReconcileResult? Result { get; set; }
+}
+
+/// <summary>A saved model: what a run learned, reusable on next month's files.</summary>
+public sealed class Model
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("analysis")] public string Analysis { get; set; } = "";
+    [JsonPropertyName("source_run_id")] public string? SourceRunId { get; set; }
+    [JsonPropertyName("created_at")] public string CreatedAt { get; set; } = "";
+    /// <summary>Only from <see cref="TrueUpClient.GetModelAsync"/>.</summary>
+    [JsonPropertyName("weights")] public JsonObject? Weights { get; set; }
+}
+
+/// <summary>Optional settings for reconciling stored files.</summary>
+public sealed class StoredOptions
+{
+    /// <summary>A saved model id: apply what it learned instead of learning again.</summary>
+    public string? Model { get; set; }
+    public Answers? Answers { get; set; }
 }
 
 public sealed class Account
@@ -295,7 +367,107 @@ public sealed class TrueUpClient
     public Task<ReconcileResult> ReconcileFilesAsync(IEnumerable<Table> files, ReconcileOptions? options = null, CancellationToken ct = default) =>
         UploadAsync(files.Select(f => ("files", f)).ToArray(), options ?? new ReconcileOptions(), ct);
 
-    private async Task<ReconcileResult> UploadAsync((string Field, Table Table)[] parts, ReconcileOptions o, CancellationToken ct)
+    // ---------------------------------------------------------------- stored files, runs, saved models
+
+    /// <summary>Upload one or more files to the team. Each comes back with its Id, Rows, Columns and Roles.</summary>
+    public async Task<List<StoredFile>> UploadFilesAsync(IEnumerable<Table> files, CancellationToken ct = default)
+    {
+        var parts = files.Select(f => ("file", f)).ToArray();
+        if (parts.Length == 0) throw new InvalidRequestException("Pass at least one file to upload.", 0, "invalid_request", null);
+        return Deserialize<FilesEnvelope>(await SendAsync(HttpMethod.Post, "/v1/files", Multipart(parts, null), ct)).Files;
+    }
+
+    /// <summary>The team's stored files.</summary>
+    public async Task<List<StoredFile>> ListFilesAsync(CancellationToken ct = default) =>
+        Deserialize<FilesEnvelope>(await SendAsync(HttpMethod.Get, "/v1/files", null, ct)).Files;
+
+    public async Task<StoredFile> GetFileAsync(string id, CancellationToken ct = default) =>
+        Deserialize<FileEnvelope>(await SendAsync(HttpMethod.Get, $"/v1/files/{Esc(id)}", null, ct)).File;
+
+    /// <summary>The file's bytes, exactly as uploaded.</summary>
+    public Task<byte[]> FileContentAsync(string id, CancellationToken ct = default) =>
+        SendBytesAsync(HttpMethod.Get, $"/v1/files/{Esc(id)}/content", null, ct);
+
+    public Task DeleteFileAsync(string id, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"/v1/files/{Esc(id)}", null, ct);
+
+    /// <summary>
+    /// Reconcile two files already stored in the team, by id: <paramref name="leftFileId"/> bills or claims. The run
+    /// is kept: its id is <see cref="ReconcileResult.RunId"/>. One analysis.
+    /// </summary>
+    public Task<ReconcileResult> ReconcileStoredAsync(string leftFileId, string rightFileId, StoredOptions? options = null, CancellationToken ct = default) =>
+        ReconcileStoredAsync(new JsonObject { ["left_file_id"] = leftFileId, ["right_file_id"] = rightFileId }, options, ct);
+
+    /// <summary>Reconcile stored files by id; TrueUp picks the pair and the sides. One analysis.</summary>
+    public Task<ReconcileResult> ReconcileStoredAsync(IEnumerable<string> fileIds, StoredOptions? options = null, CancellationToken ct = default) =>
+        ReconcileStoredAsync(new JsonObject { ["file_ids"] = new JsonArray(fileIds.Select(i => (JsonNode?)JsonValue.Create(i)).ToArray()) }, options, ct);
+
+    private async Task<ReconcileResult> ReconcileStoredAsync(JsonObject body, StoredOptions? o, CancellationToken ct)
+    {
+        if (o?.Model != null) body["model"] = o.Model;
+        if (o?.Answers != null) body["answers"] = JsonSerializer.SerializeToNode(o.Answers);
+        return Deserialize<ReconcileResult>(await SendAsync(HttpMethod.Post, "/v1/reconcile",
+            () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct));
+    }
+
+    /// <summary>One page of runs on stored files, newest first. <paramref name="limit"/> 1-100; <paramref name="before"/> a run id.</summary>
+    public async Task<RunPage> ListRunsAsync(int? limit = null, string? before = null, CancellationToken ct = default)
+    {
+        var q = new List<string>();
+        if (limit.HasValue) q.Add($"limit={limit.Value}");
+        if (before != null) q.Add($"before={Esc(before)}");
+        return Deserialize<RunPage>(await SendAsync(HttpMethod.Get, "/v1/runs" + (q.Count > 0 ? "?" + string.Join("&", q) : ""), null, ct));
+    }
+
+    /// <summary>Every run, newest first, fetching page after page.</summary>
+    public async IAsyncEnumerable<Run> AllRunsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        string? before = null;
+        while (true)
+        {
+            var page = await ListRunsAsync(100, before, ct).ConfigureAwait(false);
+            foreach (var r in page.Runs) yield return r;
+            if (!page.HasMore || page.Runs.Count == 0) yield break;
+            before = page.Runs[^1].Id;
+        }
+    }
+
+    /// <summary>One run and its full result, in the shape <see cref="ReconcileAsync"/> returns.</summary>
+    public async Task<RunDetail> GetRunAsync(string id, CancellationToken ct = default) =>
+        Deserialize<RunDetail>(await SendAsync(HttpMethod.Get, $"/v1/runs/{Esc(id)}", null, ct));
+
+    /// <summary>Save what a run learned as a model. Returns the model id.</summary>
+    public async Task<string> CreateModelAsync(string runId, string? name = null, CancellationToken ct = default)
+    {
+        var body = new JsonObject { ["run_id"] = runId };
+        if (name != null) body["name"] = name;
+        var json = await SendAsync(HttpMethod.Post, "/v1/models", () => new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"), ct);
+        return JsonNode.Parse(json)?["id"]?.GetValue<string>() ?? throw new TrueUpException("No model id in the response", 200, "empty_response");
+    }
+
+    public async Task<List<Model>> ListModelsAsync(CancellationToken ct = default) =>
+        Deserialize<ModelsEnvelope>(await SendAsync(HttpMethod.Get, "/v1/models", null, ct)).Models;
+
+    /// <summary>One saved model, including its Weights.</summary>
+    public async Task<Model> GetModelAsync(string id, CancellationToken ct = default) =>
+        Deserialize<ModelEnvelope>(await SendAsync(HttpMethod.Get, $"/v1/models/{Esc(id)}", null, ct)).Model;
+
+    public Task DeleteModelAsync(string id, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"/v1/models/{Esc(id)}", null, ct);
+
+    private sealed class FilesEnvelope { [JsonPropertyName("files")] public List<StoredFile> Files { get; set; } = new(); }
+    private sealed class FileEnvelope { [JsonPropertyName("file")] public StoredFile File { get; set; } = new(); }
+    private sealed class ModelsEnvelope { [JsonPropertyName("models")] public List<Model> Models { get; set; } = new(); }
+    private sealed class ModelEnvelope { [JsonPropertyName("model")] public Model Model { get; set; } = new(); }
+
+    private static string Esc(string s) => Uri.EscapeDataString(s);
+
+    // ---------------------------------------------------------------- transport
+
+    private async Task<ReconcileResult> UploadAsync((string Field, Table Table)[] parts, ReconcileOptions o, CancellationToken ct) =>
+        Deserialize<ReconcileResult>(await SendAsync(HttpMethod.Post, "/v1/reconcile", Multipart(parts, o), ct));
+
+    private static Func<HttpContent> Multipart((string Field, Table Table)[] parts, ReconcileOptions? o)
     {
         HttpContent Build()
         {
@@ -313,11 +485,11 @@ public sealed class TrueUpClient
                 };
                 form.Add(content);
             }
-            if (o.Weights != null) form.Add(Field("weights", o.Weights.ToJsonString()));
-            if (o.Answers != null) form.Add(Field("answers", JsonSerializer.Serialize(o.Answers)));
+            if (o?.Weights != null) form.Add(Field("weights", o.Weights.ToJsonString()));
+            if (o?.Answers != null) form.Add(Field("answers", JsonSerializer.Serialize(o.Answers)));
             return form;
         }
-        return Deserialize<ReconcileResult>(await SendAsync(HttpMethod.Post, "/v1/reconcile", Build, ct));
+        return Build;
     }
 
     private static string Quote(string s) => "\"" + s.Replace("\"", "_").Replace("\r", "_").Replace("\n", "_") + "\"";
@@ -330,7 +502,10 @@ public sealed class TrueUpClient
         return c;
     }
 
-    private async Task<string> SendAsync(HttpMethod method, string path, Func<HttpContent>? content, CancellationToken ct)
+    private async Task<string> SendAsync(HttpMethod method, string path, Func<HttpContent>? content, CancellationToken ct) =>
+        Encoding.UTF8.GetString(await SendBytesAsync(method, path, content, ct).ConfigureAwait(false));
+
+    private async Task<byte[]> SendBytesAsync(HttpMethod method, string path, Func<HttpContent>? content, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -355,9 +530,10 @@ public sealed class TrueUpClient
             }
             using (res)
             {
-                var text = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var bytes = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                 var status = (int)res.StatusCode;
-                if (status >= 200 && status < 300) return text;
+                if (status >= 200 && status < 300) return bytes;
+                var text = Encoding.UTF8.GetString(bytes);
                 string code = $"http_{status}", message = $"HTTP {status}";
                 try
                 {

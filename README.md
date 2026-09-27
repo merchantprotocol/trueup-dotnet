@@ -65,6 +65,32 @@ await trueup.ReconcileAsync(Table.File("statement.csv"), Table.File("receiving.c
 
 Each call to `ReconcileAsync` or `ReconcileFilesAsync` counts as one analysis on your plan.
 
+## Stored files, runs and saved models
+
+Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
+
+```csharp
+var files = await trueup.UploadFilesAsync(new[] { Table.File("statement.csv"), Table.File("receiving.csv") });
+var (statement, receiving) = (files[0], files[1]);   // .Rows, .Columns, .Roles ("Qty" -> "number", ...)
+
+var result = await trueup.ReconcileStoredAsync(statement.Id, receiving.Id);
+var modelId = await trueup.CreateModelAsync(result.RunId!, "Acme statements");
+
+// Next month: apply what was learned.
+await trueup.ReconcileStoredAsync(new[] { aprilStatement.Id, aprilReceiving.Id }, new StoredOptions { Model = modelId });
+```
+
+| Method | Returns |
+|---|---|
+| `UploadFilesAsync(tables)`, `ListFilesAsync()`, `GetFileAsync(id)` | `StoredFile`: `Id`, `Name`, `Rows`, `Columns`, `Roles` |
+| `FileContentAsync(id)` | the bytes, exactly as uploaded |
+| `DeleteFileAsync(id)` | |
+| `ReconcileStoredAsync(leftId, rightId, options)`, `ReconcileStoredAsync(fileIds, options)` | a result with `RunId` (one analysis) |
+| `ListRunsAsync(limit, before)` | `RunPage`: `Runs`, `HasMore`, newest first |
+| `AllRunsAsync()` | every run (`await foreach`, pages for you) |
+| `GetRunAsync(id)` | `RunDetail`: `Run`, `Result` |
+| `CreateModelAsync(runId, name)`, `ListModelsAsync()`, `GetModelAsync(id)`, `DeleteModelAsync(id)` | `GetModelAsync` includes the `Weights` |
+
 ## Findings
 
 | `Kind` | Meaning |
@@ -113,7 +139,7 @@ new TrueUpClient(new TrueUpOptions
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 2 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 4 analyses)
 just test                            # or: docker compose run --rm test
 ```
 
