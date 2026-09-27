@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -134,5 +134,21 @@ public class ApiTests
         var again = await tu.MatchAsync(Table.Rows("invoice.csv", Rows("invoice.csv")), Table.Rows("catalog.csv", Rows("catalog.csv")), result.Details.Weights);
         Assert.Equal(want, Pairs(again));
         Assert.False(again.Details.Model!["learned"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task AuditSixInvoicesThenOneAgainstTheSavedLaws()
+    {
+        if (!Live) return;
+        var tu = new TrueUpClient();
+        var files = Enumerable.Range(1, 6).Select(i => Table.File(Path.Combine(Fixtures, "invoices", $"inv-104{i}.txt")));
+        var result = await tu.AuditAsync(files);
+        Assert.Equal("audit", result.Analysis);
+        var f = Assert.Single(result.Findings);
+        Assert.Equal(("inv-1045.txt", "yes", 200.0), (f.Subject, f.Status, f.Amount!.Value));
+        Assert.Contains(result.Details.Laws, l => l.Text == "subtotal + tax amount = total");
+        var one = await tu.AuditAsync(new[] { Table.File(Path.Combine(Fixtures, "invoices", "inv-1045.txt")) }, result.Details.Weights);
+        Assert.False(one.Details.Model!["learned"]!.GetValue<bool>());
+        Assert.Equal("inv-1045.txt", Assert.Single(one.Findings).Subject);
     }
 }
