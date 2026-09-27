@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net8.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>TrueUp</RootNamespace>
+    <PackageId>TrueUp</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Merchant Protocol</Authors>
+    <Description>Official TrueUp API client for .NET: reconcile ledgers, statements and bank feeds</Description>
+    <PackageTags>trueup;reconciliation;accounting;bank-reconciliation;ledger;api-client</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/merchantprotocol/trueup-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/merchantprotocol/trueup-dotnet</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="TrueUp.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
