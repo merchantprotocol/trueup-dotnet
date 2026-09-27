@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -118,5 +118,21 @@ public class ApiTests
             await tu.DeleteFileAsync(receiving.Id);
         }
         await Assert.ThrowsAsync<NotFoundException>(() => tu.GetFileAsync(statement.Id));
+    }
+
+    [Fact]
+    public async Task MatchTwoListsThenReuseTheLearning()
+    {
+        if (!Live) return;
+        var tu = new TrueUpClient();
+        var want = new[] { "1~1", "2~2", "3~3", "4~5" };
+        static string[] Pairs(MatchResult r) => r.Details.Pairs.Select(p => $"{p[0]!.GetValue<string>()}~{p[1]!.GetValue<string>()}").ToArray();
+        var result = await tu.MatchAsync(Table.File(Path.Combine(Fixtures, "invoice.csv")), Table.File(Path.Combine(Fixtures, "catalog.csv")));
+        Assert.Equal("match", result.Analysis);
+        Assert.Equal(want, Pairs(result));
+        Assert.Equal(new[] { "5" }, result.Findings.Where(f => f.Kind == "only_left").Select(f => f.Subject).ToArray());
+        var again = await tu.MatchAsync(Table.Rows("invoice.csv", Rows("invoice.csv")), Table.Rows("catalog.csv", Rows("catalog.csv")), result.Details.Weights);
+        Assert.Equal(want, Pairs(again));
+        Assert.False(again.Details.Model!["learned"]!.GetValue<bool>());
     }
 }

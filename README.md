@@ -65,6 +65,21 @@ await trueup.ReconcileAsync(Table.File("statement.csv"), Table.File("receiving.c
 
 Each call to `ReconcileAsync` or `ReconcileFilesAsync` counts as one analysis on your plan.
 
+## Match
+
+Two lists that describe the same things in different words (two catalogs, a supplier's price book and your invoice, two vendor lists): every record on the left is paired with its counterpart on the right, or reported as having none. Nothing is configured; the columns can have different names.
+
+```csharp
+var result = await trueup.MatchAsync(Table.File("invoice.csv"), Table.File("catalog.csv"));
+Console.WriteLine(result.Headline);
+// 4 of 5 records in invoice.csv matched to catalog.csv (0 unsure); 1 have no counterpart.
+foreach (var f in result.Findings) Console.WriteLine($"{f.Kind} {f.Subject} {f.Detail}");
+// match 4 ~ 5 4 · cheese puffs jumbo 8oz · 3.30 · 10  ↔  C-105 · Cheese Puffs Jumbo 8 oz · 3.25
+// only_left 5 5 · beef jerky teriyaki 2.5oz · 5.75 · 6
+```
+
+`Kind` is `match`, `unsure_match` (a person should check), `only_left` or `only_right`. `Details.Pairs` lists `[left id, right id, confidence]`. Like `ReconcileAsync`, it takes `Table.File`, `Table.Content` or `Table.Rows`; `MatchFilesAsync` picks the pair; `MatchStoredAsync` works on stored files (with a saved model); and `Details.Weights` can be passed back to `MatchAsync(left, right, weights)` to match next month's lists the same way. One analysis per call.
+
 ## Stored files, runs and saved models
 
 Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
@@ -139,7 +154,7 @@ new TrueUpClient(new TrueUpOptions
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 4 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 6 analyses)
 just test                            # or: docker compose run --rm test
 ```
 
